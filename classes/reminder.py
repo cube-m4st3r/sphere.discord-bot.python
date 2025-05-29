@@ -5,11 +5,11 @@ from prefect_sqlalchemy import SqlAlchemyConnector
 from sqlalchemy.orm import Session
 from sqlalchemy import select
 
-from sqlalchemy.ext.asyncio import create_async_engine, AsyncSession
+from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 from sqlalchemy.sql import func
 
-DATABASE_URL = "postgresql+asyncpg://sphere:1234@192.168.2.53/sphere_default"
+from utils.send_push_notification import send_notification_to_ntfy
 
 
 class Reminder(Base):
@@ -32,17 +32,14 @@ class Reminder(Base):
         return cls(discord_user_id=str(discord_user_id), message=message, remind_at=remind_at)
     
     @classmethod
-    async def load_due_reminders(cls):
-        
-        async_engine = create_async_engine(
-        DATABASE_URL,
-        )
-
+    async def load_due_reminders(cls) -> list:
+        """Load all reminders that are due and not sent yet (async)."""
+        connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
+        async_engine = connector.get_engine()
         AsyncSessionLocal = sessionmaker(
             bind=async_engine,
             class_=AsyncSession,
         )
-    
         try:
             now = datetime.now(timezone.utc)
             async with AsyncSessionLocal() as session:
@@ -55,62 +52,57 @@ class Reminder(Base):
                 reminders = result.scalars().all()
                 return reminders
         except Exception as e:
-            print(f"Error loading due reminders: {e}")
+            import logging
+            logging.error(f"Error loading due reminders: {e}")
             return []
 
     def is_due(self) -> bool:
+        """Check if this reminder is due (synchronous)."""
         from sqlalchemy.exc import SQLAlchemyError
-
         try:
-            connector = SqlAlchemyConnector.load("spheredefaultcreds")  # no await
+            connector = SqlAlchemyConnector.load("spheredefaultasynccreds")
             engine = connector.get_engine()
-
-            with Session(engine) as session:  # synchronous context manager
+            with Session(engine) as session:
                 result = session.execute(
                     select(Reminder.remind_at)
                     .where(Reminder.id == self.id, Reminder.sent == False)
                 )
                 remind_at = result.scalar_one_or_none()
-
                 if remind_at is None:
                     return False
-
                 return datetime.now(timezone.utc) >= remind_at
-
         except SQLAlchemyError as e:
-            print(f"Database error while checking is_due: {e}")
+            import logging
+            logging.error(f"Database error while checking is_due: {e}")
             return False
-    
-    async def store_into_db(self):
+
+    async def store_into_db(self) -> None:
+        """Store this reminder into the database (async)."""
         from sqlalchemy.exc import SQLAlchemyError
-
         connector = await SqlAlchemyConnector.load("spheredefaultcreds")
-
         engine = connector.get_engine()
-        Base.metadata.create_all(engine)
-
         try:
             with Session(engine) as session:
-                reminder = self
-                session.add(reminder)
+                session.add(self)
                 session.commit()
         except SQLAlchemyError as e:
-            print(f"Failed to store reminder: {e}")
-            return
-        
-    async def mark_as_sent(self):
-        try:
-            # connector = await SqlAlchemyConnector.load("spheredefaultcreds")
-            # engine = connector.get_engine()
-            
-            async_engine = create_async_engine(
-            DATABASE_URL,
-            )
+            import logging
+            logging.error(f"Failed to store reminder: {e}")
 
+    async def mark_as_sent(self) -> None:
+        """Mark this reminder as sent in the database (async)."""
+        # from sqlalchemy.exc import SQLAlchemyError
+        try:
+            connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
+            async_engine = connector.get_engine()
             async with AsyncSession(async_engine) as session:
                 async with session.begin():
-                    self.sent = True
-                    session.add(self)  # or session.merge(self)
+                    db_reminder = await session.get(Reminder, self.id)
+                    if db_reminder:
+                        db_reminder.sent = True
                 await session.commit()
         except Exception as e:
-            print(f"Error marking reminder as sent: {e}")
+            import logging
+            logging.error(f"Error marking reminder as sent: {e}")
+            
+    
