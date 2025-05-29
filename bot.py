@@ -6,6 +6,12 @@ import config
 import discord
 from discord.ext import commands
 from colorama import Back, Fore, Style
+from commands.tools import send_due_reminders
+
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
+
+scheduler = AsyncIOScheduler()
 
 MY_GUILD = discord.Object(id=config.botConfig["hub-server-guild-id"])
 
@@ -45,6 +51,9 @@ class Client(commands.Bot):
         print(f"{prfx} Python Version {Fore.YELLOW} {str(platform.python_version())}", flush=True)
         print(f"{prfx} Bot Version 0.1", flush=True)
         print(f"{prfx} Slash CMDs Synced: {Fore.YELLOW + str(len(await self.tree.fetch_commands(guild=MY_GUILD)))} Commands", flush=True)
+        scheduler.add_job(send_due_reminders, 'interval', seconds=10, args=[self])
+        
+        scheduler.start()
 
 client = Client()
 client.run(config.botConfig["token"])
