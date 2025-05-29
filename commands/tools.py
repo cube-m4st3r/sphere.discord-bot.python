@@ -29,6 +29,7 @@ async def send_due_reminders(self):
         if user:
             try:
                 await user.send(f"⏰ Reminder: {reminder.message}")
+                await reminder.send_push_notification()
                 await reminder.mark_as_sent()
             except Exception as e:
                 print(f"Failed to send reminder to user {reminder.discord_user_id}: {e}")

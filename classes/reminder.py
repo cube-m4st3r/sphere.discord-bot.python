@@ -106,3 +106,5 @@ class Reminder(Base):
             logging.error(f"Error marking reminder as sent: {e}")
             
     
+    async def send_push_notification(self):
+        send_notification_to_ntfy(ntfy_topic="/reminder_system", message=self.message)
