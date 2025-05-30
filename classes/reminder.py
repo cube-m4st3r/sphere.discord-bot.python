@@ -1,4 +1,4 @@
-from sqlalchemy import Column, Integer, String, DateTime, Boolean, ForeignKey
+from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Boolean
 from base import Base
 from datetime import datetime, timezone
 from prefect_sqlalchemy import SqlAlchemyConnector
@@ -16,7 +16,7 @@ class Reminder(Base):
     __tablename__ = 'reminders'
 
     id = Column(Integer, primary_key=True)
-    discord_user_id = Column(String, nullable=False)
+    discord_user_id = Column(BigInteger, nullable=False)
     channel_id = Column(String, nullable=True)
     guild_id = Column(String, nullable=True)
     message = Column(String, nullable=False)
@@ -32,8 +32,8 @@ class Reminder(Base):
         return cls(discord_user_id=str(discord_user_id), message=message, remind_at=remind_at)
     
     @classmethod
-    async def load_due_reminders(cls) -> list:
-        """Load all reminders that are due and not sent yet (async)."""
+    async def _load_due_reminders(cls, *additional_filters) -> list:
+        """Internal helper to load reminders with optional filters."""
         connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
         async_engine = connector.get_engine()
         AsyncSessionLocal = sessionmaker(
@@ -43,18 +43,30 @@ class Reminder(Base):
         try:
             now = datetime.now(timezone.utc)
             async with AsyncSessionLocal() as session:
-                result = await session.execute(
-                    select(cls).where(
-                        cls.sent == False,
-                        cls.remind_at <= now
-                    )
+                stmt = select(cls).where(
+                    cls.sent == False,
+                    cls.remind_at <= now,
+                    *additional_filters
                 )
+                result = await session.execute(stmt)
                 reminders = result.scalars().all()
+                print(stmt)
                 return reminders
         except Exception as e:
             import logging
-            logging.error(f"Error loading due reminders: {e}")
+            logging.error(f"Error loading due reminders with filters {additional_filters}: {e}")
             return []
+
+    @classmethod
+    async def load_due_reminders(cls) -> list:
+        """Load all due, unsent reminders (globally)."""
+        return await cls._load_due_reminders()
+
+    @classmethod
+    async def load_due_reminders_from_user(cls, user_id) -> list:
+        """Load all due, unsent reminders for a specific user."""
+        return await cls._load_due_reminders(cls.discord_user_id == int(user_id))
+
 
     def is_due(self) -> bool:
         """Check if this reminder is due (synchronous)."""
@@ -81,6 +93,8 @@ class Reminder(Base):
         from sqlalchemy.exc import SQLAlchemyError
         connector = await SqlAlchemyConnector.load("spheredefaultcreds")
         engine = connector.get_engine()
+        
+        Base.metadata.create_all(bind=engine)
         try:
             with Session(engine) as session:
                 session.add(self)
