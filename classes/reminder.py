@@ -3,7 +3,7 @@ from base import Base
 from datetime import datetime, timezone
 from prefect_sqlalchemy import SqlAlchemyConnector
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import select, func
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
@@ -32,8 +32,8 @@ class Reminder(Base):
         return cls(discord_user_id=str(discord_user_id), message=message, remind_at=remind_at)
     
     @classmethod
-    async def _load_due_reminders(cls, *filters) -> list:
-        """Internal helper to load reminders with optional filters."""
+    async def _load_due_reminders(cls, *selectables, filters=None, group_by=None, return_scalar=False):
+        """Internal helper to load reminders with optional filters and scalar option."""
         connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
         async_engine = connector.get_engine()
         AsyncSessionLocal = sessionmaker(
@@ -42,26 +42,43 @@ class Reminder(Base):
         )
         try:
             async with AsyncSessionLocal() as session:
-                stmt = select(cls).where(*filters)
+                stmt = select(*selectables)
+                if filters:
+                    stmt = stmt.where(*filters)
+                if group_by:
+                    stmt = stmt.group_by(*group_by)
                 result = await session.execute(stmt)
-                reminders = result.scalars().all()
-                return reminders
+                if return_scalar:
+                    # scalar_one_or_none raises if multiple rows; here scalar_one_or_none or scalar_one works for a single scalar
+                    return result.scalar_one_or_none()
+                return result.scalars().all()
         except Exception as e:
             import logging
             logging.error(f"Error loading due reminders with filters {filters}: {e}")
-            return []
+            return None if return_scalar else []
+
 
     @classmethod
     async def load_due_reminders(cls) -> list:
         """Load all due, unsent reminders (globally)."""
         now = datetime.now(timezone.utc)
-        return await cls._load_due_reminders(cls.sent == False, cls.remind_at <= now)
+        return await cls._load_due_reminders(cls, filters=(cls.sent == False, cls.remind_at <= now))
     
     @classmethod
     async def load_due_reminders_from_user(cls, user_id) -> list:
         """Load all due, unsent reminders for a specific user."""
-        now = datetime.now(timezone.utc)
-        return await cls._load_due_reminders(cls.sent == False, cls.discord_user_id==str(user_id))
+        # now = datetime.now(timezone.utc) # used for dev purposes
+        return await cls._load_due_reminders(cls, filters=(cls.sent == False, cls.discord_user_id==str(user_id)))
+
+    @classmethod
+    async def get_next_list_id_for_user(cls, user_id: str) -> int:
+        """Return the next available list_id for a given user using abstraction."""
+        max_id = await cls._load_due_reminders(
+            func.max(cls.list_id),
+            filters=(cls.discord_user_id == user_id, cls.sent == False),
+            return_scalar=True
+        )
+        return (max_id or 0) + 1
 
 
     def is_due(self) -> bool:
@@ -75,6 +92,8 @@ class Reminder(Base):
                     select(self.remind_at)
                     .where(self.id == self.id, self.sent == False)
                 )
+                session.close()
+                
                 remind_at = result.scalar_one_or_none()
                 if remind_at is None:
                     return False
@@ -90,11 +109,16 @@ class Reminder(Base):
         connector = await SqlAlchemyConnector.load("spheredefaultcreds")
         engine = connector.get_engine()
         
-        Base.metadata.create_all(bind=engine) # dev purposes
+        #self.list_id = await self.__class__.get_max_list_id_from_user(user_id=self.discord_user_id) + 1
+        
+        self.list_id = await self.__class__.get_next_list_id_for_user(user_id=self.discord_user_id)
+        
+        #Base.metadata.create_all(bind=engine) # dev purposes
         try:
             with Session(engine) as session:
                 session.add(self)
                 session.commit()
+                session.close()
         except SQLAlchemyError as e:
             import logging
             logging.error(f"Failed to store reminder: {e}")
@@ -111,6 +135,7 @@ class Reminder(Base):
                     if db_reminder:
                         db_reminder.sent = True
                 await session.commit()
+                await session.close()
         except Exception as e:
             import logging
             logging.error(f"Error marking reminder as sent: {e}")
