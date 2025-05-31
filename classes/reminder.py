@@ -7,7 +7,6 @@ from sqlalchemy import select
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
-from sqlalchemy.sql import func
 
 from utils.send_push_notification import send_notification_to_ntfy
 
@@ -16,13 +15,14 @@ class Reminder(Base):
     __tablename__ = 'reminders'
 
     id = Column(Integer, primary_key=True)
-    discord_user_id = Column(BigInteger, nullable=False)
+    discord_user_id = Column(String, nullable=False)
     channel_id = Column(String, nullable=True)
     guild_id = Column(String, nullable=True)
     message = Column(String, nullable=False)
-    remind_at = Column(DateTime(timezone=True), nullable=False, default=func.now())
-    created_at = Column(DateTime, default=datetime.now(timezone.utc))
+    remind_at = Column(DateTime(timezone=True), nullable=False)
+    created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     sent = Column(Boolean, default=False)
+    list_id = Column(Integer, nullable=False, default=0)
 
     def __repr__(self):
         return f"<Reminder(user_id={self.user_id}, remind_at={self.remind_at}, sent={self.sent})>"
@@ -32,7 +32,7 @@ class Reminder(Base):
         return cls(discord_user_id=str(discord_user_id), message=message, remind_at=remind_at)
     
     @classmethod
-    async def _load_due_reminders(cls, *additional_filters) -> list:
+    async def _load_due_reminders(cls, *filters) -> list:
         """Internal helper to load reminders with optional filters."""
         connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
         async_engine = connector.get_engine()
@@ -41,31 +41,27 @@ class Reminder(Base):
             class_=AsyncSession,
         )
         try:
-            now = datetime.now(timezone.utc)
             async with AsyncSessionLocal() as session:
-                stmt = select(cls).where(
-                    cls.sent == False,
-                    cls.remind_at <= now,
-                    *additional_filters
-                )
+                stmt = select(cls).where(*filters)
                 result = await session.execute(stmt)
                 reminders = result.scalars().all()
-                print(stmt)
                 return reminders
         except Exception as e:
             import logging
-            logging.error(f"Error loading due reminders with filters {additional_filters}: {e}")
+            logging.error(f"Error loading due reminders with filters {filters}: {e}")
             return []
 
     @classmethod
     async def load_due_reminders(cls) -> list:
         """Load all due, unsent reminders (globally)."""
-        return await cls._load_due_reminders()
-
+        now = datetime.now(timezone.utc)
+        return await cls._load_due_reminders(cls.sent == False, cls.remind_at <= now)
+    
     @classmethod
     async def load_due_reminders_from_user(cls, user_id) -> list:
         """Load all due, unsent reminders for a specific user."""
-        return await cls._load_due_reminders(cls.discord_user_id == int(user_id))
+        now = datetime.now(timezone.utc)
+        return await cls._load_due_reminders(cls.sent == False, cls.discord_user_id==str(user_id))
 
 
     def is_due(self) -> bool:
@@ -76,8 +72,8 @@ class Reminder(Base):
             engine = connector.get_engine()
             with Session(engine) as session:
                 result = session.execute(
-                    select(Reminder.remind_at)
-                    .where(Reminder.id == self.id, Reminder.sent == False)
+                    select(self.remind_at)
+                    .where(self.id == self.id, self.sent == False)
                 )
                 remind_at = result.scalar_one_or_none()
                 if remind_at is None:
@@ -94,7 +90,7 @@ class Reminder(Base):
         connector = await SqlAlchemyConnector.load("spheredefaultcreds")
         engine = connector.get_engine()
         
-        Base.metadata.create_all(bind=engine)
+        Base.metadata.create_all(bind=engine) # dev purposes
         try:
             with Session(engine) as session:
                 session.add(self)
