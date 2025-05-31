@@ -43,7 +43,7 @@ async def transform_reminders(discord_user_id: str):
     
     for reminder in reminders:
         try:
-            reminder_list += f"<t:{reminder.remind_at}:R>: {reminder.message}"
+            reminder_list += f"`#{reminder.list_id}` [<t:{int(reminder.remind_at.timestamp())}:R>]: {reminder.message}\n"
         except Exception as e:
             print(f"Failed to list reminders of the user [{reminder.discord_user_id}]: {e}")
             
@@ -65,11 +65,11 @@ class ReminderGroup(app_commands.Group):
     async def list(self, interaction: discord.Interaction):
         message = await transform_reminders(discord_user_id=interaction.user.id)
         
-        if message is "":
+        if message == "":
             await interaction.response.send_message(f"You have no ongoing reminders!")
             return
         
-        await interaction.response.send_message(message)
+        await interaction.response.send_message(f"Here's a list of your current ongoing reminders.\n\n>>> {message}")
 
 
 class ReminderCommand(commands.Cog):
