@@ -1,14 +1,28 @@
-from sqlalchemy import Column, Integer, BigInteger, String, DateTime, Boolean
+from sqlalchemy import Column, Integer, String, DateTime, Boolean
 from base import Base
 from datetime import datetime, timezone
 from prefect_sqlalchemy import SqlAlchemyConnector
 from sqlalchemy.orm import Session
 from sqlalchemy import select, func
+from handlers.loki_logging import get_logger
 
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import sessionmaker
 
 from utils.send_push_notification import send_notification_to_ntfy
+
+
+loki_logger = get_logger(
+    "sphere.discord.python",
+    level="debug",
+    labels={
+        "app": "sphere",
+        "env": "dev",
+        "service": "discord_bot",
+        "lang": "python",
+        "class": "reminder"
+    }
+)
 
 
 class Reminder(Base):
@@ -32,7 +46,7 @@ class Reminder(Base):
         return cls(discord_user_id=str(discord_user_id), message=message, remind_at=remind_at)
     
     @classmethod
-    async def _load_due_reminders(cls, *selectables, filters=None, group_by=None, return_scalar=False):
+    async def _load_due_reminders(cls, *selectables, filters=None, group_by=None, order_by=None, return_scalar=False):
         """Internal helper to load reminders with optional filters and scalar option."""
         connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
         async_engine = connector.get_engine()
@@ -45,16 +59,18 @@ class Reminder(Base):
                 stmt = select(*selectables)
                 if filters:
                     stmt = stmt.where(*filters)
+                if order_by:
+                    stmt = stmt.order_by(*order_by)
                 if group_by:
                     stmt = stmt.group_by(*group_by)
                 result = await session.execute(stmt)
                 if return_scalar:
                     # scalar_one_or_none raises if multiple rows; here scalar_one_or_none or scalar_one works for a single scalar
                     return result.scalar_one_or_none()
+                
                 return result.scalars().all()
         except Exception as e:
-            import logging
-            logging.error(f"Error loading due reminders with filters {filters}: {e}")
+            loki_logger.error(f"Error loading due reminders with filters {filters}: {e}")
             return None if return_scalar else []
 
 
@@ -69,6 +85,21 @@ class Reminder(Base):
         """Load all due, unsent reminders for a specific user."""
         # now = datetime.now(timezone.utc) # used for dev purposes
         return await cls._load_due_reminders(cls, filters=(cls.sent == False, cls.discord_user_id==str(user_id)))
+    
+    @classmethod
+    async def load_due_reminders_ordered_by_due_time(cls, user_id: str = None) -> list:
+        """Load due reminders ordered by earliest remind_at time first, optionally for a user."""
+        
+        filters = [cls.sent == False]
+        if user_id:
+            filters.append(cls.discord_user_id == str(user_id))
+        
+        await cls._load_due_reminders(
+            cls,
+            filters=filters,
+            order_by=(cls.remind_at.desc(),), 
+            group_by=(cls.list_id)
+        )
 
     @classmethod
     async def get_next_list_id_for_user(cls, user_id: str) -> int:
@@ -99,8 +130,7 @@ class Reminder(Base):
                     return False
                 return datetime.now(timezone.utc) >= remind_at
         except SQLAlchemyError as e:
-            import logging
-            logging.error(f"Database error while checking is_due: {e}")
+            loki_logger.error(f"Database error while checking is_due: {e}")
             return False
 
     async def store_into_db(self) -> None:
@@ -119,9 +149,9 @@ class Reminder(Base):
                 session.add(self)
                 session.commit()
                 session.close()
+                loki_logger.info(f"Stored a reminder into the database.")
         except SQLAlchemyError as e:
-            import logging
-            logging.error(f"Failed to store reminder: {e}")
+            loki_logger.error(f"Failed to store reminder: {e}")
 
     async def mark_as_sent(self) -> None:
         """Mark this reminder as sent in the database (async)."""
@@ -137,8 +167,7 @@ class Reminder(Base):
                 await session.commit()
                 await session.close()
         except Exception as e:
-            import logging
-            logging.error(f"Error marking reminder as sent: {e}")
+            loki_logger.error(f"Error marking reminder as sent: {e}")
             
     
     async def send_push_notification(self):
