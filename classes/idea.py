@@ -11,6 +11,7 @@ from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy.future import select
+from sqlalchemy.ext.asyncio import AsyncSession
 
 
 loki_logger = get_logger(
@@ -44,6 +45,31 @@ class Category(Base):
     def __repr__(self):
         return f"<Category(name={self.name})>"
 
+    @classmethod
+    async def get_or_create(cls, name: str) -> "Category":
+        """Get an existing Category by name or create a new one if it doesn't exist."""
+        connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
+        engine = connector.get_engine()
+
+        try:
+            async with AsyncSession(engine) as session:
+                result = await session.execute(select(cls).where(cls.name == name))
+                existing = result.scalars().first()
+                if existing:
+                    return existing
+
+                new_category = cls(name=name)
+                session.add(new_category)
+                await session.commit()
+                await session.refresh(new_category)
+                loki_logger.info(f"Created new category: {new_category}")
+                return new_category
+
+        except SQLAlchemyError as e:
+            loki_logger.error(f"Error during fetching or creating a category named '{name}': {e}")
+            raise
+
+    
 class Tag(Base):
     __tablename__ = 'tag'
     
