@@ -76,7 +76,6 @@ class Tag(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
     
-    # Many-to-many with Idea
     ideas = relationship(
         "idea",
         secondary=idea_tag_association,
@@ -86,25 +85,28 @@ class Tag(Base):
     def __repr__(self):
         return f"<Tag(name={self.name})>"
     
-    async def get_or_create_tag(name: str) -> "Tag":
+    @classmethod
+    async def get_or_create(cls, name: str) -> "Tag":
         """Returns an existing tag or creates a new one."""
-        connector = await SqlAlchemyConnector.load("spheredefaultcreds")
+        connector = await SqlAlchemyConnector.load("spheredefaultasynccreds")
         engine = connector.get_engine()
 
         try:
-            with Session(engine) as session:
-                stmt = select(Tag).where(Tag.name == name)
-                result = session.execute(stmt).scalar_one_or_none()
-                if result:
-                    return result
+            async with AsyncSession(engine) as session:
+                result = await session.execute(select(cls).where(cls.name == name))
+                existing = result.scalars().first()
+                if existing:
+                    return existing
 
-                tag = Tag(name=name)
-                session.add(tag)
-                session.commit()
-                session.refresh(tag)
-                return tag
+                new_tag = cls(name=name)
+                session.add(new_tag)
+                await session.commit()
+                await session.refresh(new_tag)
+                loki_logger.info(f"Created new tag: {new_tag}")
+                return new_tag
+
         except SQLAlchemyError as e:
-            loki_logger.error(f"Failed to store or fetch tag: {e}")
+            loki_logger.error(f"Error during fetching or creating a tag named '{name}': {e}")
             raise
 
 class Idea(Base):
