@@ -150,7 +150,6 @@ class Reminder(Base):
             with Session(engine) as session:
                 session.add(self)
                 session.commit()
-                session.close()
                 loki_logger.info(f"Stored a reminder into the database.")
         except SQLAlchemyError as e:
             loki_logger.error(f"Failed to store reminder: {e}")
@@ -166,8 +165,6 @@ class Reminder(Base):
                     db_reminder = await session.get(Reminder, self.id)
                     if db_reminder:
                         db_reminder.sent = True
-                await session.commit()
-                await session.close()
         except Exception as e:
             loki_logger.error(f"Error marking reminder as sent: {e}")
             
