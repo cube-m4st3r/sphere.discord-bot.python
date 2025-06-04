@@ -9,6 +9,8 @@ from handlers.loki_logging import get_logger
 
 from sqlalchemy import ForeignKey
 from sqlalchemy.orm import relationship
+from sqlalchemy.exc import SQLAlchemyError
+from sqlalchemy.future import select
 
 
 loki_logger = get_logger(
@@ -57,6 +59,27 @@ class Tag(Base):
 
     def __repr__(self):
         return f"<Tag(name={self.name})>"
+    
+    async def get_or_create_tag(name: str) -> "Tag":
+        """Returns an existing tag or creates a new one."""
+        connector = await SqlAlchemyConnector.load("spheredefaultcreds")
+        engine = connector.get_engine()
+
+        try:
+            with Session(engine) as session:
+                stmt = select(Tag).where(Tag.name == name)
+                result = session.execute(stmt).scalar_one_or_none()
+                if result:
+                    return result
+
+                tag = Tag(name=name)
+                session.add(tag)
+                session.commit()
+                session.refresh(tag)
+                return tag
+        except SQLAlchemyError as e:
+            loki_logger.error(f"Failed to store or fetch tag: {e}")
+            raise
 
 class Idea(Base):
     __tablename__ = 'idea'
