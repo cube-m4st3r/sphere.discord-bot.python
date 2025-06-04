@@ -11,6 +11,8 @@ from sqlalchemy.orm import sessionmaker
 
 from utils.send_push_notification import send_notification_to_ntfy
 
+from sqlalchemy.orm import relationship
+
 
 loki_logger = get_logger(
     "sphere.discord.python",
@@ -20,7 +22,6 @@ loki_logger = get_logger(
         "env": "dev",
         "service": "discord_bot",
         "lang": "python",
-        "class": "reminder"
     }
 )
 
@@ -37,6 +38,7 @@ class Reminder(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     sent = Column(Boolean, default=False)
     list_id = Column(Integer, nullable=False, default=0)
+    idea = relationship("idea", back_populates="reminder", uselist=False)
 
     def __repr__(self):
         return f"<Reminder(user_id={self.user_id}, remind_at={self.remind_at}, sent={self.sent})>"
