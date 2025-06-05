@@ -38,7 +38,7 @@ class Reminder(Base):
     created_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
     sent = Column(Boolean, default=False)
     list_id = Column(Integer, nullable=False, default=0)
-    idea = relationship("idea", back_populates="reminder", uselist=False)
+    idea = relationship("Idea", back_populates="reminder", uselist=False)
 
     def __repr__(self):
         return f"<Reminder(user_id={self.user_id}, remind_at={self.remind_at}, sent={self.sent})>"

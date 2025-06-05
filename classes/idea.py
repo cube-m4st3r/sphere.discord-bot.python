@@ -40,7 +40,7 @@ class Category(Base):
     id = Column(Integer, primary_key=True)
     name = Column(String, nullable=False, unique=True)
     
-    ideas = relationship("idea", back_populates="category")
+    ideas = relationship("Idea", back_populates="category")
 
     def __repr__(self):
         return f"<Category(name={self.name})>"
@@ -77,7 +77,7 @@ class Tag(Base):
     name = Column(String, nullable=False, unique=True)
     
     ideas = relationship(
-        "idea",
+        "Idea",
         secondary=idea_tag_association,
         back_populates="tags"
     )
@@ -129,7 +129,7 @@ class Idea(Base):
     updated_at = Column(DateTime(timezone=True), default=lambda: datetime.now(timezone.utc))
 
     reminder_id = Column(Integer, ForeignKey('reminders.id'))
-    reminder = relationship("Reminder", backref="idea", uselist=False)
+    reminder = relationship("Reminder", back_populates="idea", uselist=False)
 
     archived = Column(Boolean, nullable=False, default=False)
     pinned = Column(Boolean, nullable=False, default=False)
@@ -143,6 +143,8 @@ class Idea(Base):
         from sqlalchemy.exc import SQLAlchemyError
         connector = await SqlAlchemyConnector.load("spheredefaultcreds")
         engine = connector.get_engine()
+        
+        Base.metadata.create_all(bind=engine) # dev purposes
         
         try:
             with Session(engine) as session:
